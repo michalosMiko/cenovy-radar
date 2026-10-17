@@ -8,6 +8,8 @@
 const SHEET_NAME = 'List 1';
 // název listu, kam se zapisují chyby (vytvoří se sám při první chybě)
 const LOG_SHEET_NAME = 'Log';
+// název listu s denními snímky cen (sloupce: id, datum, cena; vytvoří se sám)
+const HISTORIE_SHEET_NAME = 'Historie';
 // číslo sloupce s aktuální cenou (počítáno od 1, sloupec C)
 const COL_PRICE = 3;
 // číslo sloupce se změnou za den (sloupec D)
@@ -188,8 +190,208 @@ function zapisCeny_(zaznamy) {
   sheet.getRange(2, COL_UPDATED, pocet, 4).setValues(data.map((r) => r.slice(COL_UPDATED - 1, COL_CTIME)));
 }
 
+// vrátí list Historie; když neexistuje, vytvoří ho i s hlavičkou
+function ziskejHistoriiList_() {
+  // otevře tabulku, ke které je skript připojený
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  // zkusí najít existující list Historie
+  let list = ss.getSheetByName(HISTORIE_SHEET_NAME);
+  // když list ještě není, vytvoří ho
+  if (!list) {
+    // vytvoří nový list na konci
+    list = ss.insertSheet(HISTORIE_SHEET_NAME);
+    // zapíše hlavičku sloupců
+    list.getRange(1, 1, 1, 3).setValues([['id', 'datum', 'cena']]);
+    // sloupec s datem nastaví jako prostý text, aby ho Tabulky nepřevedly na datum
+    list.getRange('B:B').setNumberFormat('@');
+    // ukotví první řádek s hlavičkou
+    list.setFrozenRows(1);
+  }
+  // vrátí list
+  return list;
+}
+
+// převede hodnotu z buňky (text nebo datum) na text ve tvaru rrrr-mm-dd
+function datumText_(hodnota) {
+  // když Tabulky hodnotu přece jen převedly na datum, naformátuje ho zpět na text
+  if (hodnota instanceof Date) return Utilities.formatDate(hodnota, 'Europe/Prague', 'yyyy-MM-dd');
+  // jinak vezme text bez mezer
+  return String(hodnota).trim();
+}
+
+// vrátí datum před zadaným počtem dní jako text rrrr-mm-dd (pražský čas)
+function datumPred_(dnu) {
+  // od aktuálního času odečte dny a naformátuje
+  return Utilities.formatDate(new Date(new Date().getTime() - dnu * 86400000), 'Europe/Prague', 'yyyy-MM-dd');
+}
+
+// zapíše řádky [id, datum, cena] do listu Historie dávkově
+// prepsat = true: když už existuje řádek pro stejné id a datum, přepíše jeho cenu (denní snímek)
+// prepsat = false: existující řádky nechá být a přidá jen nové (zpětné doplnění)
+function zapisDoHistorie_(radky, prepsat) {
+  // když není co zapisovat, skončí
+  if (!radky.length) return;
+  // vezme list Historie
+  const list = ziskejHistoriiList_();
+  // spočítá už zapsané řádky bez hlavičky
+  const pocet = Math.max(list.getLastRow() - 1, 0);
+  // načte všechny existující řádky najednou
+  const existujici = pocet ? list.getRange(2, 1, pocet, 3).getValues() : [];
+  // postaví si mapu klíč (id|datum) -> pořadí řádku v paměti
+  const mapa = {};
+  // projde existující řádky
+  existujici.forEach((r, i) => { mapa[String(r[0]).trim() + '|' + datumText_(r[1])] = i; });
+  // sem se naskládají řádky, které v listu ještě nejsou
+  const nove = [];
+  // pamatuje si, jestli se přepsala některá stará cena
+  let prepsano = false;
+  // projde všechny řádky určené k zápisu
+  radky.forEach((r) => {
+    // klíč řádku je id a datum
+    const klic = r[0] + '|' + r[1];
+    // když už v listu je
+    if (klic in mapa) {
+      // při přepisu změní cenu v paměti (jen u řádků, které už jsou v listu)
+      if (prepsat && mapa[klic] >= 0 && mapa[klic] < existujici.length) { existujici[mapa[klic]][2] = r[2]; prepsano = true; }
+      // jinak řádek přeskočí
+      return;
+    }
+    // označí klíč jako zapsaný, aby se v jedné dávce nepřidal dvakrát (-1 = nový řádek)
+    mapa[klic] = -1;
+    // přidá řádek mezi nové
+    nove.push([r[0], r[1], r[2]]);
+  });
+  // když se přepisovaly ceny, zapíše celý sloupec C zpět jedním voláním
+  if (prepsano) list.getRange(2, 3, pocet, 1).setValues(existujici.map((r) => [r[2]]));
+  // nové řádky přidá na konec jedním voláním
+  if (nove.length) list.getRange(list.getLastRow() + 1, 1, nove.length, 3).setValues(nove);
+}
+
+// uloží denní snímek: aktuální ceny všech aktiv z listu s daty do listu Historie
+function ulozSnimekHistorie_() {
+  // vezme list s daty
+  const sheet = ziskejList_();
+  // spočítá datové řádky bez hlavičky
+  const pocet = sheet.getLastRow() - 1;
+  // když v tabulce nic není, skončí
+  if (pocet < 1) return;
+  // načte sloupce A až C (id, název, cena)
+  const data = sheet.getRange(2, 1, pocet, 3).getValues();
+  // dnešní datum jako text
+  const dnes = datumPred_(0);
+  // sem se naskládají řádky snímku
+  const radky = [];
+  // projde všechny řádky tabulky
+  data.forEach((r) => {
+    // ID aktiva bez mezer
+    const id = String(r[0]).trim();
+    // cena jako číslo (prázdná buňka dá 0)
+    const cena = Number(r[2]);
+    // přidá jen řádky s ID a kladnou cenou
+    if (id && cena > 0) radky.push([id, dnes, cena]);
+  });
+  // zapíše snímek a při opakovaném běhu ve stejný den přepíše dnešní cenu
+  zapisDoHistorie_(radky, true);
+}
+
+// načte celou Historii do paměti jako objekt { id: [ {d: 'rrrr-mm-dd', p: cena}, ... ] } seřazený od nejstaršího
+function nactiHistoriiMapu_() {
+  // vezme list Historie
+  const list = ziskejHistoriiList_();
+  // spočítá řádky bez hlavičky
+  const pocet = Math.max(list.getLastRow() - 1, 0);
+  // načte všechny řádky najednou
+  const data = pocet ? list.getRange(2, 1, pocet, 3).getValues() : [];
+  // výsledná mapa
+  const mapa = {};
+  // projde všechny řádky
+  data.forEach((r) => {
+    // ID bez mezer
+    const id = String(r[0]).trim();
+    // cena jako číslo
+    const cena = Number(r[2]);
+    // prázdné nebo vadné řádky přeskočí
+    if (!id || !(cena > 0)) return;
+    // pro nové ID založí pole
+    if (!mapa[id]) mapa[id] = [];
+    // přidá bod do řady
+    mapa[id].push({ d: datumText_(r[1]), p: cena });
+  });
+  // seřadí každou řadu podle data (text rrrr-mm-dd se řadí správně i jako text)
+  Object.keys(mapa).forEach((id) => mapa[id].sort((a, b) => (a.d < b.d ? -1 : a.d > b.d ? 1 : 0)));
+  // vrátí mapu
+  return mapa;
+}
+
+// vrátí cenu z doby před zadaným počtem dní (poslední známou k tomu dni), nebo undefined když historie nestačí
+function cenaPredDny_(rada, dnu) {
+  // bez řady nebo bez bodů nemáme nic
+  if (!rada || !rada.length) return undefined;
+  // cílové datum
+  const cil = datumPred_(dnu);
+  // nejstarší záznam je novější než cíl: historie ještě nesahá tak daleko
+  if (rada[0].d > cil) return undefined;
+  // nejstarší datum, které ještě přijmeme (tolerance 7 dní kvůli víkendům a svátkům)
+  const nejdriv = datumPred_(dnu + 7);
+  // prochází řadu od konce a hledá poslední záznam k cílovému dni
+  for (let i = rada.length - 1; i >= 0; i--) {
+    // záznam je dost starý, tak ho vezme, ale jen když není moc starý
+    if (rada[i].d <= cil) return rada[i].d >= nejdriv ? rada[i].p : undefined;
+  }
+  // nic nenalezeno
+  return undefined;
+}
+
+// doplní do záznamů změny za den, týden, měsíc a rok spočítané z Historie (jen tam, kde je zdroj sám nedodal)
+function doplnZmeny_(zaznamy) {
+  // načte historii jednou pro všechna aktiva
+  const historie = nactiHistoriiMapu_();
+  // dvojice název pole a počet dní zpět
+  const okna = [['day', 1], ['week', 7], ['month', 30], ['year', 365]];
+  // projde všechna aktiva v záznamech
+  Object.keys(zaznamy).forEach((id) => {
+    // záznam aktiva
+    const z = zaznamy[id];
+    // bez aktuální ceny nemá smysl počítat
+    if (!(z.price > 0)) return;
+    // projde všechna časová okna
+    okna.forEach((o) => {
+      // když zdroj změnu dodal, nechá ji být
+      if (z[o[0]] !== undefined) return;
+      // najde cenu z dřívější doby
+      const stara = cenaPredDny_(historie[id], o[1]);
+      // když ji máme, spočítá změnu jako zlomek (0,021 = 2,1 %)
+      if (stara) z[o[0]] = Number((z.price / stara - 1).toFixed(3));
+    });
+  });
+}
+
+// vrátí historii jako JSON { updatedAt, history: { id: [[datum, cena], ...] } }, volitelně jen pro jedno id
+function historieJson_(idFiltr) {
+  // načte historii do paměti
+  const mapa = nactiHistoriiMapu_();
+  // sem se uloží výstup ve zhuštěném tvaru
+  const vystup = {};
+  // projde všechna ID
+  Object.keys(mapa).forEach((id) => {
+    // když web chce jedno ID, ostatní přeskočí
+    if (idFiltr && id !== idFiltr) return;
+    // převede body na dvojice [datum, cena]
+    vystup[id] = mapa[id].map((b) => [b.d, b.p]);
+  });
+  // vrátí odpověď jako JSON
+  return ContentService
+    // vytvoří textový výstup z objektu
+    .createTextOutput(JSON.stringify({ updatedAt: Utilities.formatDate(new Date(), 'Europe/Prague', 'dd.MM.yyyy HH:mm'), history: vystup }))
+    // nastaví typ odpovědi na JSON
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
 // vrátí data z tabulky jako JSON (webová aplikace, kterou čte web)
+// adresa s parametrem ?historie=1 vrátí časové řady z listu Historie (volitelně &id=btc jen pro jedno aktivum)
 function doGet(e) {
+  // když web chce historii, vrátí ji a končí
+  if (e && e.parameter && e.parameter.historie) return historieJson_(e.parameter.id);
   // vezme list s daty
   const sheet = ziskejList_();
   // načte všechny řádky najednou
@@ -322,10 +524,113 @@ function aktualizujStabilniMakrodata() {
     });
     // když se nenašel žádný kurz, je to chyba (změnil se formát souboru)
     if (Object.keys(kurzy).length === 0) throw new Error('V souboru ČNB nebyl kurz EUR ani USD');
-    // zapíše nové kurzy do tabulky (změny za den až rok tu nepřepisujeme)
+    // dopočítá změny za den, týden, měsíc a rok z listu Historie (ČNB je nedodává)
+    doplnZmeny_(kurzy);
+    // zapíše nové kurzy a změny do tabulky
     zapisCeny_(kurzy);
+    // uloží denní snímek všech cen do listu Historie (po zápisu, aby v něm byly dnešní ceny)
+    ulozSnimekHistorie_();
   } catch (err) {
     // chybu uloží do listu Log
     zalogujChybu_('aktualizujStabilniMakrodata', err);
+  }
+}
+
+/**
+ * JEDNORÁZOVĚ (spustit ručně): zpětné doplnění Historie kurzů EUR a USD z ročních souborů ČNB
+ */
+function zpetneDoplnKurzy() {
+  try {
+    // roky, které se doplní (rok 365 dní zpět může sahat do předchozího roku)
+    const roky = [new Date().getFullYear() - 1, new Date().getFullYear()];
+    // sem se naskládají řádky [id, datum, cena]
+    const radky = [];
+    // projde oba roky
+    roky.forEach((rok) => {
+      // adresa ročního souboru ČNB (jeden řádek na den, sloupec na měnu)
+      const url = 'https://www.cnb.cz/cs/financni-trhy/devizovy-trh/kurzy-devizoveho-trhu/kurzy-devizoveho-trhu/rok.txt?rok=' + rok;
+      // stáhne soubor a rozdělí ho na neprázdné řádky
+      const r = stahni_(url).split('\n').filter((x) => x.trim() !== '');
+      // první řádek je hlavička: Datum|1 AUD|1 BGN|...
+      const hlavicka = r[0].split('|').map((x) => x.trim());
+      // najde sloupec s eurem (1 EUR)
+      const iEur = hlavicka.indexOf('1 EUR');
+      // najde sloupec s dolarem (1 USD)
+      const iUsd = hlavicka.indexOf('1 USD');
+      // když sloupce chybí, změnil se formát souboru
+      if (iEur < 0 || iUsd < 0) throw new Error('V hlavičce ročního souboru ČNB ' + rok + ' chybí 1 EUR nebo 1 USD');
+      // projde datové řádky
+      r.slice(1).forEach((radek) => {
+        // rozdělí řádek podle svislítka
+        const c = radek.split('|');
+        // datum je ve tvaru dd.MM.rrrr
+        const d = c[0].trim().split('.');
+        // vadné řádky přeskočí
+        if (d.length !== 3) return;
+        // přeskládá datum na rrrr-mm-dd
+        const datum = d[2] + '-' + ('0' + d[1]).slice(-2) + '-' + ('0' + d[0]).slice(-2);
+        // kurz eura jako číslo (desetinná čárka na tečku)
+        const eur = parseFloat(String(c[iEur]).replace(',', '.'));
+        // kurz dolaru jako číslo
+        const usd = parseFloat(String(c[iUsd]).replace(',', '.'));
+        // přidá euro, když je číslo
+        if (eur) radky.push(['eur-czk', datum, eur]);
+        // přidá dolar, když je číslo
+        if (usd) radky.push(['usd-czk', datum, usd]);
+      });
+    });
+    // zapíše jen chybějící dny, existující nepřepisuje
+    zapisDoHistorie_(radky, false);
+  } catch (err) {
+    // chybu uloží do listu Log
+    zalogujChybu_('zpetneDoplnKurzy', err);
+  }
+}
+
+/**
+ * JEDNORÁZOVĚ (spustit ručně): zpětné doplnění Historie kryptoměn z CoinGecko (denní ceny za 365 dní)
+ */
+function zpetneDoplnKrypto() {
+  try {
+    // vezme demo klíč CoinGecko z Vlastností skriptu
+    const klic = PropertiesService.getScriptProperties().getProperty('COINGECKO_KEY');
+    // bez klíče nemá smysl pokračovat
+    if (!klic) throw new Error('Ve Vlastnostech skriptu chybí COINGECKO_KEY');
+    // dnešní datum se nezapisuje, to dělá denní snímek
+    const dnes = datumPred_(0);
+    // sem se naskládají řádky [id, datum, cena]
+    const radky = [];
+    // projde všechny sledované mince
+    KRYPTO.forEach((k) => {
+      try {
+        // adresa CoinGecko: denní ceny v USD za posledních 365 dní
+        const url = 'https://api.coingecko.com/api/v3/coins/' + k.cg + '/market_chart?vs_currency=usd&days=365&interval=daily';
+        // stáhne odpověď a pošle klíč v hlavičce
+        const odpoved = UrlFetchApp.fetch(url, { muteHttpExceptions: true, headers: { 'x-cg-demo-api-key': klic } });
+        // jiný kód než 200 je chyba této mince, ostatní se zkusí dál
+        if (odpoved.getResponseCode() !== 200) throw new Error('HTTP ' + odpoved.getResponseCode() + ' z CoinGecko pro ' + k.cg);
+        // převede odpověď na objekt a vezme pole cen [čas, cena]
+        const ceny = JSON.parse(odpoved.getContentText('UTF-8')).prices || [];
+        // projde všechny body
+        ceny.forEach((b) => {
+          // převede čas v milisekundách na datum rrrr-mm-dd v UTC (CoinGecko dává denní body o půlnoci UTC)
+          const datum = Utilities.formatDate(new Date(b[0]), 'UTC', 'yyyy-MM-dd');
+          // dnešek a vadné body přeskočí
+          if (datum === dnes || !(b[1] > 0)) return;
+          // přidá řádek
+          radky.push([k.id, datum, b[1]]);
+        });
+      } catch (err) {
+        // chybu jedné mince uloží do Logu a pokračuje další mincí
+        zalogujChybu_('zpetneDoplnKrypto ' + k.id, err);
+      }
+      // pauza mezi dotazy, aby demo klíč nenarazil na limit dotazů za minutu
+      Utilities.sleep(2500);
+    });
+    // zapíše jen chybějící dny, existující nepřepisuje
+    zapisDoHistorie_(radky, false);
+  } catch (err) {
+    // chybu uloží do listu Log
+    zalogujChybu_('zpetneDoplnKrypto', err);
   }
 }
