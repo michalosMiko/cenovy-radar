@@ -35,29 +35,29 @@ const PRAH_KURZ = 0.01;
 // nejdéle po kolika dnech se komentář obnoví, i když se cena nehýbe
 const MAX_STARI_KOMENTARE_DNI = 3;
 
-// sledované kryptoměny: id řádku v tabulce, název a id na coinpaprika.com
+// sledované kryptoměny: id řádku v tabulce, název a id na coingecko.com
 const KRYPTO = [
-  { id: 'btc', nazev: 'Bitcoin (BTC)', cp: 'btc-bitcoin' },
-  { id: 'eth', nazev: 'Ethereum (ETH)', cp: 'eth-ethereum' },
-  { id: 'bnb', nazev: 'BNB (BNB)', cp: 'bnb-binance-coin' },
-  { id: 'xrp', nazev: 'XRP (XRP)', cp: 'xrp-xrp' },
-  { id: 'sol', nazev: 'Solana (SOL)', cp: 'sol-solana' },
-  { id: 'trx', nazev: 'TRON (TRX)', cp: 'trx-tron' },
-  { id: 'hype', nazev: 'Hyperliquid (HYPE)', cp: 'hype-hyperliquid' },
-  { id: 'zec', nazev: 'Zcash (ZEC)', cp: 'zec-zcash' },
-  { id: 'doge', nazev: 'Dogecoin (DOGE)', cp: 'doge-dogecoin' },
-  { id: 'xmr', nazev: 'Monero (XMR)', cp: 'xmr-monero' },
-  { id: 'leo', nazev: 'UNUS SED LEO (LEO)', cp: 'leo-unus-sed-leo' },
-  { id: 'link', nazev: 'Chainlink (LINK)', cp: 'link-chainlink' },
-  { id: 'ada', nazev: 'Cardano (ADA)', cp: 'ada-cardano' },
-  { id: 'okb', nazev: 'OKB (OKB)', cp: 'okb-okb' },
-  { id: 'near', nazev: 'NEAR Protocol (NEAR)', cp: 'near-near-protocol' },
-  { id: 'bch', nazev: 'Bitcoin Cash (BCH)', cp: 'bch-bitcoin-cash' },
-  { id: 'xlm', nazev: 'Stellar (XLM)', cp: 'xlm-stellar' },
-  { id: 'ltc', nazev: 'Litecoin (LTC)', cp: 'ltc-litecoin' },
-  { id: 'uni', nazev: 'Uniswap (UNI)', cp: 'uni-uniswap' },
-  { id: 'avax', nazev: 'Avalanche (AVAX)', cp: 'avax-avalanche' },
-  { id: 'ton', nazev: 'Toncoin (TON)', cp: 'ton-toncoin' }
+  { id: 'btc', nazev: 'Bitcoin (BTC)', cg: 'bitcoin' },
+  { id: 'eth', nazev: 'Ethereum (ETH)', cg: 'ethereum' },
+  { id: 'bnb', nazev: 'BNB (BNB)', cg: 'binancecoin' },
+  { id: 'xrp', nazev: 'XRP (XRP)', cg: 'ripple' },
+  { id: 'sol', nazev: 'Solana (SOL)', cg: 'solana' },
+  { id: 'trx', nazev: 'TRON (TRX)', cg: 'tron' },
+  { id: 'hype', nazev: 'Hyperliquid (HYPE)', cg: 'hyperliquid' },
+  { id: 'zec', nazev: 'Zcash (ZEC)', cg: 'zcash' },
+  { id: 'doge', nazev: 'Dogecoin (DOGE)', cg: 'dogecoin' },
+  { id: 'xmr', nazev: 'Monero (XMR)', cg: 'monero' },
+  { id: 'leo', nazev: 'UNUS SED LEO (LEO)', cg: 'leo-token' },
+  { id: 'link', nazev: 'Chainlink (LINK)', cg: 'chainlink' },
+  { id: 'ada', nazev: 'Cardano (ADA)', cg: 'cardano' },
+  { id: 'okb', nazev: 'OKB (OKB)', cg: 'okb' },
+  { id: 'near', nazev: 'NEAR Protocol (NEAR)', cg: 'near' },
+  { id: 'bch', nazev: 'Bitcoin Cash (BCH)', cg: 'bitcoin-cash' },
+  { id: 'xlm', nazev: 'Stellar (XLM)', cg: 'stellar' },
+  { id: 'ltc', nazev: 'Litecoin (LTC)', cg: 'litecoin' },
+  { id: 'uni', nazev: 'Uniswap (UNI)', cg: 'uniswap' },
+  { id: 'avax', nazev: 'Avalanche (AVAX)', cg: 'avalanche-2' },
+  { id: 'ton', nazev: 'Toncoin (TON)', cg: 'the-open-network' }
 ];
 
 // vrátí list s daty, aby se hledání nemuselo opakovat v každé funkci
@@ -261,28 +261,30 @@ function zlomek_(procenta) {
  */
 function aktualizujVolatilniTrhy() {
   try {
-    // připraví dotaz na coinpaprika.com pro každou kryptoměnu (cena + změny 24 h, 7 d, 30 d, 1 rok)
-    const pozadavky = KRYPTO.map((k) => ({ url: 'https://api.coinpaprika.com/v1/tickers/' + k.cp + '?quotes=USD', muteHttpExceptions: true }));
-    // odešle všechny dotazy najednou
-    const odpovedi = UrlFetchApp.fetchAll(pozadavky);
+    // vezme bezplatný demo klíč CoinGecko z Vlastností skriptu (klíč není v kódu)
+    const klic = PropertiesService.getScriptProperties().getProperty('COINGECKO_KEY');
+    // bez klíče nemá smysl pokračovat
+    if (!klic) throw new Error('Ve Vlastnostech skriptu chybí COINGECKO_KEY');
+    // složí seznam id všech sledovaných mincí oddělených čárkou
+    const ids = KRYPTO.map((k) => k.cg).join(',');
+    // adresa CoinGecko: cena v USD a změny za 24 h, 7 dní, 30 dní a rok pro všechny mince najednou
+    const url = 'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=' + ids + '&price_change_percentage=24h,7d,30d,1y&per_page=250';
+    // stáhne odpověď a pošle klíč v hlavičce
+    const odpoved = UrlFetchApp.fetch(url, { muteHttpExceptions: true, headers: { 'x-cg-demo-api-key': klic } });
+    // jakýkoliv jiný kód než 200 je chyba
+    if (odpoved.getResponseCode() !== 200) throw new Error('HTTP ' + odpoved.getResponseCode() + ' z CoinGecko');
+    // převede odpověď z textu na pole mincí
+    const pole = JSON.parse(odpoved.getContentText('UTF-8'));
     // sem se uloží výsledky podle ID řádku v tabulce
     const zaznamy = {};
-    // projde odpovědi (pořadí odpovídá pořadí v seznamu KRYPTO)
-    odpovedi.forEach((o, i) => {
-      // vezme kryptoměnu, ke které odpověď patří
-      const k = KRYPTO[i];
-      // chybu jedné měny zachytí zvlášť, aby ostatní prošly
-      try {
-        // jakýkoliv jiný kód než 200 je chyba
-        if (o.getResponseCode() !== 200) throw new Error('HTTP ' + o.getResponseCode() + ' pro ' + k.cp);
-        // vezme ceny v USD z odpovědi
-        const q = JSON.parse(o.getContentText('UTF-8')).quotes.USD;
-        // uloží cenu a změny jako zlomky
-        zaznamy[k.id] = { price: q.price, day: zlomek_(q.percent_change_24h), week: zlomek_(q.percent_change_7d), month: zlomek_(q.percent_change_30d), year: zlomek_(q.percent_change_1y) };
-      } catch (err) {
-        // chybu této měny uloží do listu Log
-        zalogujChybu_('aktualizujVolatilniTrhy ' + k.id, err);
-      }
+    // projde všechny sledované mince
+    KRYPTO.forEach((k) => {
+      // najde minci v odpovědi podle id na CoinGecko
+      const c = pole.filter((x) => x.id === k.cg)[0];
+      // když ji CoinGecko nevrátil, zapíše chybu a pokračuje další mincí
+      if (!c) { zalogujChybu_('aktualizujVolatilniTrhy ' + k.id, new Error('CoinGecko nevrátil ' + k.cg)); return; }
+      // uloží cenu a změny jako zlomky
+      zaznamy[k.id] = { price: c.current_price, day: zlomek_(c.price_change_percentage_24h_in_currency), week: zlomek_(c.price_change_percentage_7d_in_currency), month: zlomek_(c.price_change_percentage_30d_in_currency), year: zlomek_(c.price_change_percentage_1y_in_currency) };
     });
     // zapíše všechno do tabulky najednou
     zapisCeny_(zaznamy);

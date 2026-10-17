@@ -6,7 +6,7 @@ aktualizuje ceny v Google Tabulce a poskytuje je webu jako JSON.
 ## Jak to funguje
 
 - `aktualizujStabilniMakrodata` – 1x denně stáhne kurzy EUR a USD z ČNB.
-- `aktualizujVolatilniTrhy` – každých 6 hodin stáhne cenu Bitcoinu z Krakenu (změna se počítá od dnešního otevření, od půlnoci UTC).
+- `aktualizujVolatilniTrhy` – každých 6 hodin stáhne ceny 20 kryptoměn a jejich změny za den, týden, měsíc a rok z CoinGecko (potřebuje bezplatný demo klíč ve Vlastnostech skriptu pod názvem `COINGECKO_KEY`).
 - `doGet` – webová aplikace vrací data z tabulky jako JSON
   (změny `day`, `week`, `month`, `year` jsou zlomky, např. `-0.004` = -0,4 %).
 - Chyby se zapisují do listu `Log` v tabulce.
