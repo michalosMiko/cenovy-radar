@@ -158,16 +158,26 @@ function doGet(e) {
  */
 function aktualizujVolatilniTrhy() {
   try {
-    // adresa CoinGecko API: cena Bitcoinu v USD a změna za 24 hodin
-    const url = 'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true';
+    // adresa Kraken API: aktuální cena Bitcoinu v USD (CoinGecko vracel HTTP 429)
+    const url = 'https://api.kraken.com/0/public/Ticker?pair=XBTUSD';
     // stáhne odpověď a převede ji z textu na objekt
-    const result = JSON.parse(stahni_(url));
-    // když odpověď neobsahuje Bitcoin, je to chyba
-    if (!result || !result.bitcoin) throw new Error('CoinGecko nevrátil data o Bitcoinu');
-    // převede změnu z procent na zlomek (2,1 % → 0,021) a zaokrouhlí na 0,1 %
-    const zmena = Number((result.bitcoin.usd_24h_change / 100).toFixed(3));
+    const odpoved = JSON.parse(stahni_(url));
+    // Kraken hlásí chyby v poli error, když není prázdné, je to chyba
+    if (odpoved.error && odpoved.error.length) throw new Error('Kraken: ' + odpoved.error.join(', '));
+    // vezme první (jedinou) dvojici z výsledku, název klíče se u Krakenu liší (XXBTZUSD)
+    const ticker = Object.values(odpoved.result || {})[0];
+    // když data o páru chybí, je to chyba
+    if (!ticker) throw new Error('Kraken nevrátil data o Bitcoinu');
+    // poslední cena obchodu (c[0]) jako číslo
+    const cena = parseFloat(ticker.c[0]);
+    // dnešní otevírací cena (o), od půlnoci UTC
+    const otevreni = parseFloat(ticker.o);
+    // když cena nebo otevírací cena není číslo, je to chyba
+    if (!cena || !otevreni) throw new Error('Kraken vrátil neplatnou cenu');
+    // změna od otevření jako zlomek (0,021 = 2,1 %), zaokrouhlená na 0,1 %
+    const zmena = Number((cena / otevreni - 1).toFixed(3));
     // zapíše cenu a změnu do řádku s ID btc
-    zapisCeny_({ 'btc': result.bitcoin.usd }, { 'btc': zmena });
+    zapisCeny_({ 'btc': cena }, { 'btc': zmena });
   } catch (err) {
     // chybu uloží do listu Log
     zalogujChybu_('aktualizujVolatilniTrhy', err);
